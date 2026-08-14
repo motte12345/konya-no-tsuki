@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>今夜の月</title>
+<meta name="description" content="今夜の月の満ち欠け。月齢・月相・輝面比、次の新月と満月。">
+<style>
+  :root {
+    --bg1: #0b1026;
+    --bg2: #1a2242;
+    --text: #e8eaf2;
+    --dim: #9aa3c0;
+    --accent: #f5d78e;
+    --card: rgba(255, 255, 255, 0.05);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    min-height: 100vh;
+    background: radial-gradient(ellipse at 50% -20%, var(--bg2), var(--bg1) 70%);
+    color: var(--text);
+    font-family: "Hiragino Mincho ProN", "Yu Mincho", "BIZ UDMincho", serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 2.5rem 1rem 3rem;
+    overflow-x: hidden;
+  }
+  #stars { position: fixed; inset: 0; z-index: -1; }
+  h1 { font-size: 1.6rem; font-weight: 500; letter-spacing: 0.5em; text-indent: 0.5em; margin-bottom: 0.4rem; }
+  #date-label { color: var(--dim); font-size: 0.9rem; letter-spacing: 0.15em; margin-bottom: 1.8rem; }
+  #moon-wrap { filter: drop-shadow(0 0 45px rgba(245, 215, 142, 0.25)); margin-bottom: 1.6rem; }
+  #phase-name { font-size: 2rem; letter-spacing: 0.3em; text-indent: 0.3em; color: var(--accent); margin-bottom: 1.6rem; }
+  #facts {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+    justify-content: center;
+    margin-bottom: 2rem;
+  }
+  .fact {
+    background: var(--card);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 10px;
+    padding: 0.8rem 1.3rem;
+    text-align: center;
+    min-width: 8.5rem;
+  }
+  .fact .label { color: var(--dim); font-size: 0.75rem; letter-spacing: 0.2em; margin-bottom: 0.3rem; }
+  .fact .value { font-size: 1.25rem; }
+  #week { display: flex; gap: 0.6rem; flex-wrap: wrap; justify-content: center; margin-bottom: 2rem; }
+  .day { text-align: center; color: var(--dim); font-size: 0.72rem; }
+  .day svg { display: block; margin: 0 auto 0.25rem; }
+  #picker-row { color: var(--dim); font-size: 0.85rem; display: flex; gap: 0.6rem; align-items: center; }
+  #picker {
+    background: var(--card);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 6px;
+    color: var(--text);
+    font-family: inherit;
+    padding: 0.35rem 0.6rem;
+    color-scheme: dark;
+  }
+  footer { margin-top: 2.5rem; color: var(--dim); font-size: 0.72rem; letter-spacing: 0.1em; text-align: center; line-height: 1.8; }
+</style>
+</head>
+<body>
+<canvas id="stars"></canvas>
+<h1>今夜の月</h1>
+<div id="date-label"></div>
+<div id="moon-wrap"></div>
+<div id="phase-name"></div>
+<div id="facts">
+  <div class="fact"><div class="label">月齢</div><div class="value" id="age"></div></div>
+  <div class="fact"><div class="label">輝面比</div><div class="value" id="illum"></div></div>
+  <div class="fact"><div class="label">次の新月</div><div class="value" id="next-new"></div></div>
+  <div class="fact"><div class="label">次の満月</div><div class="value" id="next-full"></div></div>
+</div>
+<div id="week"></div>
+<div id="picker-row">
+  <label for="picker">別の日の月を見る</label>
+  <input type="date" id="picker">
+</div>
+<footer>
+  月齢は平均朔望月による概算です（誤差±半日程度）。<br>
+  この サイトは Claude が自律実験として企画・実装・公開しました。
+</footer>
+
+<script>
+"use strict";
+const SYNODIC = 29.530588853;                    // 平均朔望月（日）
+const EPOCH = Date.UTC(2000, 0, 6, 18, 14);      // 既知の朔 2000-01-06 18:14 UTC
+const PHASE_NAMES = ["新月", "三日月", "上弦の月", "十三夜月", "満月", "寝待月", "下弦の月", "有明月"];
+
+function moonAge(date) {
+  const days = (date.getTime() - EPOCH) / 86400000;
+  return ((days % SYNODIC) + SYNODIC) % SYNODIC;
+}
+function illumination(age) {
+  return (1 - Math.cos(2 * Math.PI * age / SYNODIC)) / 2;
+}
+function phaseName(age) {
+  return PHASE_NAMES[Math.round(age / SYNODIC * 8) % 8];
+}
+function nextPhaseDate(from, targetAge) {
+  const age = moonAge(from);
+  let delta = targetAge - age;
+  if (delta <= 0) delta += SYNODIC;
+  return new Date(from.getTime() + delta * 86400000);
+}
+
+// 月相 t(0..1) の光っている領域のSVGパス。北半球視点（上弦=右が明るい）。
+function litPath(t, r) {
+  const cos = Math.cos(2 * Math.PI * t);
+  const rx = Math.abs(cos) * r;
+  const waxing = t < 0.5;
+  const outerSweep = waxing ? 1 : 0;
+  const innerSweep = (cos > 0) === waxing ? 0 : 1;
+  return `M 0 ${-r} A ${r} ${r} 0 0 ${outerSweep} 0 ${r} A ${rx} ${r} 0 0 ${innerSweep} 0 ${-r} Z`;
+}
+
+function moonSVG(age, size) {
+  const t = age / SYNODIC;
+  const r = size / 2 - 2;
+  const full = illumination(age) > 0.99;
+  const lit = full
+    ? `<circle r="${r}" fill="url(#moonlight)"/>`
+    : `<path d="${litPath(t, r)}" fill="url(#moonlight)"/>`;
+  return `<svg width="${size}" height="${size}" viewBox="${-size / 2} ${-size / 2} ${size} ${size}">
+    <defs>
+      <radialGradient id="moonlight" cx="0.4" cy="0.35" r="0.9">
+        <stop offset="0%" stop-color="#fdf6dd"/>
+        <stop offset="100%" stop-color="#e8c97a"/>
+      </radialGradient>
+    </defs>
+    <circle r="${r}" fill="#1c2340" stroke="rgba(255,255,255,0.12)" stroke-width="1"/>
+    ${lit}
+  </svg>`;
+}
+
+const fmt = new Intl.DateTimeFormat("ja-JP", { month: "long", day: "numeric" });
+const fmtFull = new Intl.DateTimeFormat("ja-JP", { year: "numeric", month: "long", day: "numeric", weekday: "short" });
+
+function render(date) {
+  const age = moonAge(date);
+  document.getElementById("date-label").textContent = fmtFull.format(date);
+  document.getElementById("moon-wrap").innerHTML = moonSVG(age, 240);
+  document.getElementById("phase-name").textContent = phaseName(age);
+  document.getElementById("age").textContent = age.toFixed(1);
+  document.getElementById("illum").textContent = Math.round(illumination(age) * 100) + "%";
+  document.getElementById("next-new").textContent = fmt.format(nextPhaseDate(date, 0));
+  document.getElementById("next-full").textContent = fmt.format(nextPhaseDate(date, SYNODIC / 2));
+
+  const week = document.getElementById("week");
+  week.innerHTML = "";
+  for (let i = 1; i <= 7; i++) {
+    const d = new Date(date.getTime() + i * 86400000);
+    const cell = document.createElement("div");
+    cell.className = "day";
+    cell.innerHTML = moonSVG(moonAge(d), 44) + fmt.format(d);
+    week.appendChild(cell);
+  }
+}
+
+function drawStars() {
+  const canvas = document.getElementById("stars");
+  const ctx = canvas.getContext("2d");
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+  ctx.fillStyle = "rgba(255,255,255,0.7)";
+  for (let i = 0; i < 120; i++) {
+    const x = Math.random() * canvas.width;
+    const y = Math.random() * canvas.height;
+    const s = Math.random() * 1.4 + 0.2;
+    ctx.globalAlpha = Math.random() * 0.7 + 0.1;
+    ctx.fillRect(x, y, s, s);
+  }
+}
+
+const picker = document.getElementById("picker");
+const today = new Date();
+picker.value = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+picker.addEventListener("change", () => {
+  if (!picker.value) return;
+  render(new Date(picker.value + "T21:00:00"));
+});
+
+drawStars();
+window.addEventListener("resize", drawStars);
+render(today);
+</script>
+</body>
+</html>
