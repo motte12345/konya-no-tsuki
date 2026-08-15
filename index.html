@@ -89,18 +89,46 @@
   <input type="date" id="picker">
 </div>
 <footer>
-  月齢は平均朔望月による概算です（誤差±半日程度）。
+  月齢は月と太陽の視黄経差（Meeus簡約式）から計算しています（誤差おおむね±1時間）。
 </footer>
 
 <script>
 "use strict";
 const SYNODIC = 29.530588853;                    // 平均朔望月（日）
-const EPOCH = Date.UTC(2000, 0, 6, 18, 14);      // 既知の朔 2000-01-06 18:14 UTC
 const PHASE_NAMES = ["新月", "三日月", "上弦の月", "十三夜月", "満月", "寝待月", "下弦の月", "有明月"];
+const rad = d => d * Math.PI / 180;
 
+// 太陽・月の視黄経（Meeus簡約版）。月齢は離角から求める（誤差おおむね±1時間）
+function sunLongitude(T) {
+  const L0 = 280.46646 + T * (36000.76983 + T * 0.0003032);
+  const M = rad(357.52911 + T * 35999.05029);
+  const C = (1.914602 - T * 0.004817) * Math.sin(M) + 0.019993 * Math.sin(2 * M) + 0.000289 * Math.sin(3 * M);
+  return L0 + C;
+}
+function moonLongitude(T) {
+  const Lp = 218.3164477 + 481267.88123421 * T;
+  const D = rad(297.8501921 + 445267.1114034 * T);
+  const M = rad(357.5291092 + 35999.0502909 * T);
+  const Mp = rad(134.9633964 + 477198.8675055 * T);
+  const F = rad(93.2720950 + 483202.0175233 * T);
+  return Lp
+    + 6.288774 * Math.sin(Mp)
+    + 1.274027 * Math.sin(2 * D - Mp)
+    + 0.658314 * Math.sin(2 * D)
+    + 0.213618 * Math.sin(2 * Mp)
+    - 0.185116 * Math.sin(M)
+    - 0.114332 * Math.sin(2 * F)
+    + 0.058793 * Math.sin(2 * D - 2 * Mp)
+    + 0.057066 * Math.sin(2 * D - M - Mp)
+    + 0.053322 * Math.sin(2 * D + Mp)
+    + 0.045758 * Math.sin(2 * D - M);
+}
+function elongation(date) { // 月と太陽の視黄経差 0..360°
+  const T = (date.getTime() / 86400000 + 2440587.5 - 2451545.0) / 36525;
+  return ((moonLongitude(T) - sunLongitude(T)) % 360 + 360) % 360;
+}
 function moonAge(date) {
-  const days = (date.getTime() - EPOCH) / 86400000;
-  return ((days % SYNODIC) + SYNODIC) % SYNODIC;
+  return elongation(date) / 360 * SYNODIC;
 }
 function illumination(age) {
   return (1 - Math.cos(2 * Math.PI * age / SYNODIC)) / 2;
@@ -108,11 +136,21 @@ function illumination(age) {
 function phaseName(age) {
   return PHASE_NAMES[Math.round(age / SYNODIC * 8) % 8];
 }
-function nextPhaseDate(from, targetAge) {
-  const age = moonAge(from);
-  let delta = targetAge - age;
-  if (delta <= 0) delta += SYNODIC;
-  return new Date(from.getTime() + delta * 86400000);
+// 離角が targetDeg（0=新月, 180=満月）になる次の時刻を探す（6時間刻み→二分法）
+function nextPhaseDate(from, targetDeg) {
+  const f = t => ((elongation(new Date(t)) - targetDeg + 540) % 360) - 180;
+  const step = 6 * 3600000;
+  let prev = f(from.getTime());
+  for (let t = from.getTime() + step; t <= from.getTime() + 32 * 86400000; t += step) {
+    const cur = f(t);
+    if (prev < 0 && cur >= 0) {
+      let lo = t - step, hi = t;
+      for (let i = 0; i < 30; i++) { const mid = (lo + hi) / 2; if (f(mid) < 0) lo = mid; else hi = mid; }
+      return new Date((lo + hi) / 2);
+    }
+    prev = cur;
+  }
+  return new Date(from.getTime() + SYNODIC * 86400000);
 }
 
 // 月相 t(0..1) の光っている領域のSVGパス。北半球視点（上弦=右が明るい）。
@@ -155,7 +193,7 @@ function render(date) {
   document.getElementById("age").textContent = age.toFixed(1);
   document.getElementById("illum").textContent = Math.round(illumination(age) * 100) + "%";
   document.getElementById("next-new").textContent = fmt.format(nextPhaseDate(date, 0));
-  document.getElementById("next-full").textContent = fmt.format(nextPhaseDate(date, SYNODIC / 2));
+  document.getElementById("next-full").textContent = fmt.format(nextPhaseDate(date, 180));
 
   const week = document.getElementById("week");
   week.innerHTML = "";
